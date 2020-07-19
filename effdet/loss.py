@@ -212,7 +212,7 @@ def smooth_l1_loss(
 def _classification_loss(cls_outputs, cls_targets, num_positives, num_cls, alpha: float = 0.25, gamma: float = 2.0):
     """Computes classification loss. Focal_loss"""
     normalizer = num_positives
-    classification_loss = focal_loss(cls_outputs, cls_targets, alpha, gamma, normalizer, num_cls)
+    classification_loss = focal_loss(cls_outputs, cls_targets, alpha, gamma, normalizer, num_cls + 1)
     return classification_loss
 
 

@@ -10,6 +10,7 @@ from tqdm.auto import tqdm
 from albumentations.pytorch.transforms import ToTensorV2
 from torch.utils.data import Dataset
 from glob import glob
+import pytorch_warmup as warmup
 
 
 def get_train_transforms():
@@ -29,7 +30,6 @@ def get_train_transforms():
                     p=0.9
                 ),
             ], p=0.9),
-            A.CLAHE(p=0.5),
             A.ToGray(p=0.01),
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
@@ -267,17 +267,21 @@ class Fitter:
 
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=config.lr)
         self.scheduler = config.SchedulerClass(self.optimizer, **config.scheduler_params)
+        if self.config.warmup:
+            self.warmup_scheduler = warmup.UntunedLinearWarmup(self.optimizer)
+            self.warmup_scheduler.last_step = -1  # initialize the step counter
+
         self.log(f'Fitter prepared. Device is {self.device}')
 
     def fit(self, train_loader, validation_loader):
-        for e in range(self.config.n_epochs):
+        for epoch in range(self.config.n_epochs):
             if self.config.verbose:
                 lr = self.optimizer.param_groups[0]['lr']
                 timestamp = datetime.utcnow().isoformat()
                 self.log(f'\n{timestamp}\nLR: {lr}')
 
             t = time.time()
-            summary_loss = self.train_one_epoch(train_loader)
+            summary_loss = self.train_one_epoch(train_loader, epoch)
 
             self.log(
                 f'[RESULT]: Train. Epoch: {self.epoch}, summary_loss: {summary_loss.avg:.5f}, time: {(time.time() - t):.5f}')
@@ -294,9 +298,6 @@ class Fitter:
                 self.save(f'{self.base_dir}/best-checkpoint-{str(self.epoch).zfill(3)}epoch.bin')
                 for path in sorted(glob(f'{self.base_dir}/best-checkpoint-*epoch.bin'))[:-3]:
                     os.remove(path)
-
-            if self.config.validation_scheduler:
-                self.scheduler.step(metrics=summary_loss.avg)
 
             self.epoch += 1
 
@@ -326,7 +327,7 @@ class Fitter:
 
         return summary_loss
 
-    def train_one_epoch(self, train_loader):
+    def train_one_epoch(self, train_loader, epoch):
         self.model.train()
         summary_loss = AverageMeter()
         t = time.time()
@@ -359,6 +360,9 @@ class Fitter:
             summary_loss.update(loss.detach().item(), batch_size)
 
             self.optimizer.step()
+            if self.config.warmup:
+                self.scheduler.step()
+                self.warmup_scheduler.dampen()
 
             if self.config.step_scheduler:
                 self.scheduler.step()
