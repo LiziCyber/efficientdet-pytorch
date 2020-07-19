@@ -10,7 +10,7 @@ from tqdm.auto import tqdm
 from albumentations.pytorch.transforms import ToTensorV2
 from torch.utils.data import Dataset
 from glob import glob
-import pytorch_warmup as warmup
+from warmup_scheduler import GradualWarmupScheduler
 
 
 def get_train_transforms():
@@ -268,8 +268,7 @@ class Fitter:
         self.optimizer = torch.optim.SGD(self.model.parameters(), lr=config.lr)
         self.scheduler = config.SchedulerClass(self.optimizer, **config.scheduler_params)
         if self.config.warmup:
-            self.warmup_scheduler = warmup.UntunedLinearWarmup(self.optimizer)
-            self.warmup_scheduler.last_step = -1  # initialize the step counter
+            self.warmup_scheduler = GradualWarmupScheduler(self.optimizer, multiplier=1, total_epoch=5, after_scheduler=self.scheduler)
 
         self.log(f'Fitter prepared. Device is {self.device}')
 
@@ -328,6 +327,8 @@ class Fitter:
         return summary_loss
 
     def train_one_epoch(self, train_loader, epoch):
+        if self.config.warmup:
+            self.warmup_scheduler.step(epoch)
         self.model.train()
         summary_loss = AverageMeter()
         t = time.time()
@@ -360,12 +361,9 @@ class Fitter:
             summary_loss.update(loss.detach().item(), batch_size)
 
             self.optimizer.step()
-            if self.config.warmup:
-                self.scheduler.step()
-                self.warmup_scheduler.dampen()
 
-            if self.config.step_scheduler:
-                self.scheduler.step()
+        if self.config.step_scheduler:
+            self.scheduler.step()
 
         return summary_loss
 
