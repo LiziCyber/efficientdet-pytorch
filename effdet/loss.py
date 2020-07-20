@@ -343,9 +343,11 @@ class DetectionLoss(nn.Module):
 
         if self.use_iou_loss:
             # apply bounding box regression to anchors
-            for k in range(box_outputs_list.shape[0]):
-                pred_boxes = decode_box_outputs(box_outputs_list[k].T.float(), self.anchors.boxes.T, output_xyxy=True)
-                target_boxes = decode_box_outputs(box_targets_list[k].T.float(), self.anchors.boxes.T, output_xyxy=True)
+            box_outputs_list = torch.stack(box_outputs_list, dim=1)
+            box_targets_list = torch.stack(box_targets_list, dim=1)
+            for k in range(box_targets_list.shape[0]):
+                pred_boxes = decode_box_outputs(box_outputs_list[k].float(), self.anchors.boxes, output_xyxy=True)
+                target_boxes = decode_box_outputs(box_targets_list[k].float(), self.anchors.boxes, output_xyxy=True)
                 # indices where an anchor is assigned to target box
                 indices = box_targets_list[k] == 0.0
                 pred_boxes = torch.clamp(pred_boxes, 0)
