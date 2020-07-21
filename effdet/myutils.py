@@ -327,10 +327,12 @@ class Fitter:
         return summary_loss
 
     def train_one_epoch(self, train_loader, epoch):
+        self.model.train()
         if self.config.warmup:
             self.warmup_scheduler.step(epoch)
-        self.model.train()
         summary_loss = AverageMeter()
+        cls_loss = AverageMeter()
+        box_loss = AverageMeter()
         t = time.time()
         nb = len(train_loader)
         pbar = tqdm(enumerate(train_loader), total=nb)
@@ -340,6 +342,8 @@ class Fitter:
                     pbar.set_description(
                         f'Train Step {step}/{len(train_loader)}, ' +
                         f'summary_loss: {summary_loss.avg:.5f}, ' +
+                        f'cls_loss: {cls_loss.avg:.5f}, ' +
+                        f'box_loss: {box_loss.avg:.5f}, ' +
                         f'time: {(time.time() - t):.5f}'
                     )
 
@@ -352,15 +356,19 @@ class Fitter:
             targets = {'bbox': boxes, 'cls': labels}
             # targets['image_id'] = target['image_id']
 
-            self.optimizer.zero_grad()
-
             output = self.model(images, targets)
             loss = output['loss']
+            closs = output['class_loss']
+            bloss = output['box_loss']
             loss.backward()
 
             summary_loss.update(loss.detach().item(), batch_size)
+            cls_loss.update(closs.detach().item(), batch_size)
+            box_loss.update(bloss.detach().item(), batch_size)
 
-            self.optimizer.step()
+            if (epoch*nb + step) % self.config.accumulate == 0:
+                self.optimizer.step()
+                self.optimizer.zero_grad()
 
         if self.config.step_scheduler:
             self.scheduler.step()

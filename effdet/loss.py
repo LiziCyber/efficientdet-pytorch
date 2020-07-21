@@ -99,7 +99,7 @@ def compute_c_iou(bboxes1, bboxes2):
     c_2 = (torch.max(bboxes1[:, 2], bboxes2[:, 2]) - torch.min(bboxes1[:, 0], bboxes2[:, 0])) ** 2 + (
             torch.max(bboxes1[:, 3], bboxes2[:, 3]) - torch.min(bboxes1[:, 1], bboxes2[:, 1])) ** 2
     iou = inter / union
-    v = 4 / np.pi ** 2 * (np.arctan(w1 / h1) - np.arctan(w2 / h2)) ** 2
+    v = 4 / np.pi ** 2 * (torch.atan(w1 / h1) - torch.atan(w2 / h2)) ** 2
     with torch.no_grad():
         S = 1 - iou
         alpha = v / (S + v + eps)
@@ -282,21 +282,14 @@ class DetectionLoss(nn.Module):
         Args:
             cls_outputs: a List with values representing logits in [batch_size, height, width, num_anchors].
                 at each feature level (index)
-
             box_outputs: a List with values representing box regression targets in
                 [batch_size, height, width, num_anchors * 4] at each feature level (index)
-
             cls_targets: groundtruth class targets.
-
             box_targets: groundtrusth box targets.
-
             num_positives: num positive grountruth anchors
-
         Returns:
             total_loss: an integer tensor representing total loss reducing from class and box losses from all levels.
-
             cls_loss: an integer tensor representing total class loss.
-
             box_loss: an integer tensor representing total box regression loss.
         """
         # Sum all positives in a batch for normalization and avoid zero
@@ -306,11 +299,6 @@ class DetectionLoss(nn.Module):
 
         cls_losses = []
         box_losses = []
-        if self.use_iou_loss:
-            box_outputs_list = []
-            cls_targets_list = []
-            box_targets_list = []
-
         for l in range(levels):
             cls_targets_at_level = cls_targets[l]
             box_targets_at_level = box_targets[l]
@@ -323,35 +311,17 @@ class DetectionLoss(nn.Module):
             cls_loss = _classification_loss(
                 cls_outputs[l].permute(0, 2, 3, 1),
                 cls_targets_at_level_oh,
-                num_positives_sum, self.num_classes,
+                num_positives_sum,
                 alpha=self.alpha, gamma=self.gamma)
             cls_loss = cls_loss.view(bs, height, width, -1, self.num_classes)
             cls_loss *= (cls_targets_at_level != -2).unsqueeze(-1).float()
             cls_losses.append(cls_loss.sum())
 
-            if not self.use_iou_loss:
-                box_losses.append(_box_loss(
-                    box_outputs[l].permute(0, 2, 3, 1),
-                    box_targets_at_level,
-                    num_positives_sum,
-                    delta=self.delta))
-
-            else:
-                box_outputs_list.append(box_outputs[l].permute(0, 2, 3, 1).reshape([bs, -1, 4]))
-                cls_targets_list.append(cls_targets_at_level.permute(0, 2, 3, 1).reshape([bs, -1, 1]))
-                box_targets_list.append(box_targets_at_level.permute(0, 2, 3, 1).reshape([bs, -1, 4]))
-
-        if self.use_iou_loss:
-            # apply bounding box regression to anchors
-            box_outputs_list = torch.stack(box_outputs_list, dim=1)
-            box_targets_list = torch.stack(box_targets_list, dim=1)
-            for k in range(box_targets_list.shape[0]):
-                pred_boxes = decode_box_outputs(box_outputs_list[k].float(), self.anchors.boxes, output_xyxy=True)
-                target_boxes = decode_box_outputs(box_targets_list[k].float(), self.anchors.boxes, output_xyxy=True)
-                # indices where an anchor is assigned to target box
-                indices = box_targets_list[k] == 0.0
-                pred_boxes = torch.clamp(pred_boxes, 0)
-                box_losses.append(self.iou_loss(target_boxes[indices.view(-1)], pred_boxes[indices.view(-1)]))
+            box_losses.append(_box_loss(
+                box_outputs[l].permute(0, 2, 3, 1),
+                box_targets_at_level,
+                num_positives_sum,
+                delta=self.delta))
 
         # Sum per level losses to total loss.
         cls_loss = torch.sum(torch.stack(cls_losses, dim=-1), dim=-1)
