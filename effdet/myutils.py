@@ -11,6 +11,7 @@ from albumentations.pytorch.transforms import ToTensorV2
 from torch.utils.data import Dataset
 from glob import glob
 from warmup_scheduler import GradualWarmupScheduler
+from apex import amp
 
 
 def get_train_transforms():
@@ -272,6 +273,10 @@ class Fitter:
 
         self.log(f'Fitter prepared. Device is {self.device}')
 
+        if self.config.apex:
+            self.model, self.optimizer = amp.initialize(self.model, self.optimizer, opt_level='O1')
+
+
     def fit(self, train_loader, validation_loader):
         for epoch in range(self.config.n_epochs):
             if self.config.verbose:
@@ -303,6 +308,8 @@ class Fitter:
     def validation(self, val_loader):
         self.model.eval()
         summary_loss = AverageMeter()
+        cls_loss = AverageMeter()
+        box_loss = AverageMeter()
         t = time.time()
         nb = len(val_loader)
         pbar = tqdm(enumerate(val_loader), total=nb)
@@ -312,17 +319,26 @@ class Fitter:
                     print(
                         f'Val Step {step}/{len(val_loader)}, ' +
                         f'summary_loss: {summary_loss.avg:.5f}, ' +
+                        f'cls_loss: {cls_loss.avg:.5f}, ' +
+                        f'box_loss: {box_loss.avg:.5f}, ' +
                         f'time: {(time.time() - t):.5f}', end='\r'
                     )
             with torch.no_grad():
                 images = torch.stack(images)
-                batch_size = images.shape[0]
                 images = images.to(self.device).float()
+                batch_size = images.shape[0]
                 boxes = [target['boxes'].to(self.device).float() for target in targets]
                 labels = [target['labels'].to(self.device).float() for target in targets]
+                targets = {'bbox': boxes, 'cls': labels}
 
-                loss, _, _ = self.model(images, boxes, labels)
+                output = self.model(images, targets)
+                loss = output['loss']
+                closs = output['class_loss']
+                bloss = output['box_loss']
+
                 summary_loss.update(loss.detach().item(), batch_size)
+                cls_loss.update(closs.detach().item(), batch_size)
+                box_loss.update(bloss.detach().item(), batch_size)
 
         return summary_loss
 
@@ -360,13 +376,24 @@ class Fitter:
             loss = output['loss']
             closs = output['class_loss']
             bloss = output['box_loss']
-            loss.backward()
+
+            if self.config.apex:
+                with amp.scale_loss(loss, self.optimizer) as scaled_loss:
+                    scaled_loss.backward()
+            else:
+                loss.backward()
 
             summary_loss.update(loss.detach().item(), batch_size)
             cls_loss.update(closs.detach().item(), batch_size)
             box_loss.update(bloss.detach().item(), batch_size)
 
-            if (epoch*nb + step) % self.config.accumulate == 0:
+            if self.config.warmup:
+                accumulate = min(self.config.accumulate,
+                                 round(np.interp(epoch*nb+step, [1, epoch*nb*5], [1, self.config.accumulate])))
+            else:
+                accumulate = self.config.accumulate
+
+            if (epoch*nb + step) % accumulate == 0:
                 self.optimizer.step()
                 self.optimizer.zero_grad()
 
