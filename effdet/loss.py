@@ -312,7 +312,7 @@ class DetectionLoss(nn.Module):
                 cls_outputs[l].permute(0, 2, 3, 1),
                 cls_targets_at_level_oh,
                 num_positives_sum,
-                alpha=self.alpha, gamma=self.gamma)
+                alpha=self.alpha, gamma=self.gamma, num_cls=self.num_classes)
             cls_loss = cls_loss.view(bs, height, width, -1, self.num_classes)
             cls_loss *= (cls_targets_at_level != -2).unsqueeze(-1).float()
             cls_losses.append(cls_loss.sum())

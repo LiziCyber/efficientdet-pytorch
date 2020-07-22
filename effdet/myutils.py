@@ -121,7 +121,8 @@ class DatasetRetriever(Dataset):
         # there is only one class
         labels = torch.ones((boxes.shape[0],), dtype=torch.int64)
 
-        target = {'boxes': boxes, 'labels': labels, 'image_id': torch.tensor([index])}
+        target = {'boxes': boxes, 'labels': labels, 'image_id': torch.tensor([index]),
+                  'img_scale': torch.tensor([1.]), 'img_size': torch.tensor([(1024, 1024)])}
 
         if self.transforms:
             for i in range(10):
@@ -329,7 +330,9 @@ class Fitter:
                 batch_size = images.shape[0]
                 boxes = [target['boxes'].to(self.device).float() for target in targets]
                 labels = [target['labels'].to(self.device).float() for target in targets]
-                targets = {'bbox': boxes, 'cls': labels}
+                img_scale = torch.tensor([target['img_scale'] for target in targets]).to(self.device).float()
+                img_size = torch.tensor([(self.config.img_size, self.config.img_size) for target in targets]).to(self.device).float()
+                targets = {'bbox': boxes, 'cls': labels, 'img_scale': img_scale, 'img_size': img_size}
 
                 output = self.model(images, targets)
                 loss = output['loss']
